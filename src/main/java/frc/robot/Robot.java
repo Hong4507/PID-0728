@@ -5,15 +5,16 @@
 package frc.robot;
 
 import com.ctre.phoenix.motorcontrol.can.WPI_TalonFX;
-import com.ctre.phoenix.motorcontrol.can.WPI_TalonSRX;
 import com.kauailabs.navx.frc.AHRS;
 
+import edu.wpi.first.math.kinematics.MecanumDriveKinematics;
 import edu.wpi.first.math.kinematics.MecanumDriveOdometry;
+import edu.wpi.first.math.kinematics.MecanumDriveWheelSpeeds;
 import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj.SPI;
 import edu.wpi.first.wpilibj.TimedRobot;
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.drive.MecanumDrive;
-import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 /**
@@ -23,13 +24,6 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
  * project.
  */
 public class Robot extends TimedRobot {
-  // private static final String kDefaultAuto = "Default";
-  // private static final String kCustomAuto = "My Auto";
-  // private String m_autoSelected;
-  // private final SendableChooser<String> m_chooser = new SendableChooser<>();
-
-  final int kEncoderCPR = 2048;
-  final Double distancePerPalse = 0.13;
 
   Joystick js1 = new Joystick(0);
 
@@ -64,9 +58,42 @@ public class Robot extends TimedRobot {
    
    MecanumDrive mDrive = new MecanumDrive(LF, LR, RF, RR);
 
-   MecanumDriveOdometry odometry = new MecanumDriveOdometry(kinematics, gyroAngle);
+   AHRS m_gyro = new AHRS(SPI.Port.kMXP);
 
-   AHRS gyro = new AHRS(SPI.Port.kMXP);
+   MecanumDriveKinematics kinematics = null; // Not understand, remember to fill it.
+
+   MecanumDriveOdometry odometry = new MecanumDriveOdometry(kinematics, m_gyro.getRotation2d());
+
+   // Encoders
+   //  distancePerPulse = gearRatio * wheelPerimeter / EncoderCPR
+   //  distance = motor.getSelectedSensorPosition() * distancePerPulse
+   //  velocity = motor.getSelectedSensorVelocity() * distancePerPulse
+   final double kEncoderCPR = 2048;
+   final double kDistancePerPulse = 0.13;
+   double leftDistance = LF.getSelectedSensorPosition();
+   double rightDistance = RF.getSelectedSensorPosition();
+   double currentPosition = (leftDistance + rightDistance) / 2;
+
+   // Motor speeds
+   double speedFL = LF.getSelectedSensorVelocity() * kDistancePerPulse;
+   double speedFR = RF.getSelectedSensorVelocity() * kDistancePerPulse;
+   double speedRL = LR.getSelectedSensorVelocity() * kDistancePerPulse;
+   double speedRR = RR.getSelectedSensorVelocity() * kDistancePerPulse;
+
+   MecanumDriveWheelSpeeds wheelSpeeds = new MecanumDriveWheelSpeeds(speedFL, speedFR, speedRL, speedRR);
+
+   // Timers
+   double elapsedTime;
+   double startTime;
+   double currentTime;
+
+   // PID
+   double kP = 0.5; 
+   double targetPosition;
+   double error;
+   double output;
+
+   double currentX = odometry.getPoseMeters().getX();
 
   /**
    * This function is run when the robot is first started up and should be used for any
@@ -74,41 +101,48 @@ public class Robot extends TimedRobot {
    */
   @Override
   public void robotInit() {
+    // invert motors and encoders
     LF.setInverted(true);
     LR.setInverted(true);
+    LF.setSensorPhase(true);
+    LR.setSensorPhase(true);
+
+    // reset encoders
+    resetEncoders();
+
+    // set motors' deadband
+    mDrive.setDeadband(0.05);
   }
 
-  /**
-   * This function is called every 20 ms, no matter the mode. Use this for items like diagnostics
-   * that you want ran during disabled, autonomous, teleoperated and test.
-   *
-   * <p>This runs after the mode specific periodic functions, but before LiveWindow and
-   * SmartDashboard integrated updating.
-   */
   @Override
   public void robotPeriodic() {
-    
+    // make odometry updates periodic
+    odometry.update(m_gyro.getRotation2d(), wheelSpeeds);
   }
 
-  /**
-   * This autonomous (along with the chooser code above) shows how to select between different
-   * autonomous modes using the dashboard. The sendable chooser code works with the Java
-   * SmartDashboard. If you prefer the LabVIEW Dashboard, remove all of the chooser code and
-   * uncomment the getString line to get the auto name from the text box below the Gyro
-   *
-   * <p>You can add additional auto modes by adding additional comparisons to the switch structure
-   * below with additional strings. If using the SendableChooser make sure to add them to the
-   * chooser code above as well.
-   */
   @Override
   public void autonomousInit() {
+    // reset encoders again(for sure)
+    resetEncoders();
 
+    // set startTime
+    startTime = Timer.getFPGATimestamp();
   }
 
   /** This function is called periodically during autonomous. */
   @Override
   public void autonomousPeriodic() {
+    // get elapsed time
+    currentTime = Timer.getFPGATimestamp();
+    elapsedTime = currentTime - startTime;
 
+    // set move distance
+    targetPosition = 10;
+    error = targetPosition - currentX;
+
+    output = kP * error;
+    
+    mDrive.driveCartesian(output, 0, 0);
   }
 
   /** This function is called once when teleop is enabled. */
@@ -118,13 +152,12 @@ public class Robot extends TimedRobot {
   /** This function is called periodically during operator control. */
   @Override
   public void teleopPeriodic() {
-
+    // mecanum drive
     double ySpeed = js1.getRawAxis(leftStick_Y) * 0.6;
     double xSpeed = js1.getRawAxis(leftStick_X) * 0.6;
     double zRotation = js1.getRawAxis(rightStick_X) * 0.4;
 
     mDrive.driveCartesian(ySpeed, xSpeed, zRotation);
-
   }
 
   /** This function is called once when the robot is disabled. */
@@ -150,4 +183,13 @@ public class Robot extends TimedRobot {
   /** This function is called periodically whilst in simulation. */
   @Override
   public void simulationPeriodic() {}
+
+  // reset encoders to zero
+  public void resetEncoders() {
+    // it will report an error if timeout(10s)
+    LF.setSelectedSensorPosition(0, 0, 10);
+    LR.setSelectedSensorPosition(0, 0, 10);
+    RF.setSelectedSensorPosition(0, 0, 10);
+    RR.setSelectedSensorPosition(0, 0, 10);
+  }
 }
